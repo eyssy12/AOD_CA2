@@ -1,0 +1,186 @@
+package Core;
+
+import Enums.DownloadStatus;
+import Utilities.FileIOUtility;
+import Utilities.HTTPData;
+import Utilities.HTTPUtility;
+import Utilities.RegexUtility;
+import java.io.File;
+import java.io.FileNotFoundException;
+import java.io.IOException;
+import java.net.HttpURLConnection;
+import java.net.MalformedURLException;
+import java.net.URL;
+import java.util.logging.Level;
+import java.util.logging.Logger;
+
+public class DownloadXMLThreadTask extends Task implements Runnable
+{
+
+    private String url, xmlURL, rootSavePath, actualPath;
+    private int id, fileSize, downloaded;
+    private Thread t;
+    private DownloadStatus status = DownloadStatus.NONE;
+    private volatile boolean bStop = false;
+
+    // timer, delayInMs, id, msg, url, xmlUrl, downloadPath);
+    public DownloadXMLThreadTask(String description, int id,
+            String url, String xmlURL, String rootSavePath)
+    {
+        super(description);
+
+        this.url = url;
+        this.xmlURL = xmlURL;
+        this.rootSavePath = rootSavePath;
+        this.id = id;
+        this.fileSize = 0;
+        this.downloaded = 0;
+    }
+
+    @Override
+    public void execute()
+    {
+        this.t = new Thread(this);
+        this.t.setDaemon(false); // with this, the thread wont continue past the MainApp
+        this.status = DownloadStatus.DOWNLOADING;
+        this.t.start();
+    }
+
+    public DownloadStatus getStatus()
+    {
+        return status;
+    }
+
+    public void setStatus(DownloadStatus status)
+    {
+        this.status = status;
+    }
+
+    public String getStatusStr()
+    {
+        return status.getValue();
+    }
+    
+    public int getFileSize()
+    {
+        return fileSize;
+    }
+    
+    public String getXmlURL()
+    {
+        return xmlURL;
+    }
+
+    @Override
+    public void run()
+    {
+        if(!bStop)
+        {
+            System.out.println(" -Thread " + id + " downloading...");
+            xmlURL = RegexUtility.replaceAll("\\s", xmlURL, "%20");
+
+            //method to get header length (file size)
+            httpRequestSize();
+//            HTTPData httpData = HTTPUtility.download(url + xmlURL);
+            HTTPData httpData = HTTPUtility.download(url + xmlURL, this); //passes thread in for progress details
+            fileSize = httpData.getLength();
+            
+                    
+            xmlURL = RegexUtility.replaceAll("[/\\\\]", xmlURL, "+");
+
+            // create the root dir if not existing already
+            File root = new File(rootSavePath);
+            if(!root.exists())
+            {
+                root.mkdir();
+            }
+
+            // create a child dir, name it by the date the xml's we're downloaded
+            File saveFile = new File(rootSavePath + httpData.getDownloadDateAsString());
+            if(!saveFile.exists())
+            {
+                saveFile.mkdir();
+            }
+
+            this.actualPath = saveFile.getAbsolutePath() + "\\" + xmlURL;
+            try
+            {
+                FileIOUtility.writeXML(httpData.getHTMLData().toString(), actualPath);
+            } catch (FileNotFoundException e)
+            {
+                this.status = DownloadStatus.FAILED;
+                System.out.println("Error(FNF): " + e.getMessage());
+                e.printStackTrace();
+            } catch (IOException e)
+            {
+                this.status = DownloadStatus.FAILED;
+                e.printStackTrace();
+            }
+
+            this.status = DownloadStatus.COMPLETED;
+            System.out.println("Thread " + id + " finished!");
+        }
+        else
+        {
+            this.status = DownloadStatus.CANCELED;
+        }
+    }
+
+    public void kill()
+    {
+        this.bStop = true;
+    }
+    
+    public float getProgress()
+    {
+        return ((float) downloaded / this.fileSize) * 100;
+    }
+
+    public void setDownloaded(int downloaded)
+    {
+        this.downloaded = downloaded;
+    }
+    
+    public int getDownloaded()
+    {
+        return this.downloaded;
+    }
+    
+    /**
+     * Requests for the header to get the size of the file
+     */
+    public void httpRequestSize()
+    {
+        HttpURLConnection conn = null;
+        try
+        {
+            URL url = new URL(this.url + this.xmlURL);
+            conn = (HttpURLConnection) url.openConnection();
+            conn.setRequestMethod("HEAD");
+            conn.getInputStream();
+            this.fileSize = conn.getContentLength();
+
+        } catch (MalformedURLException ex)
+        {
+            Logger.getLogger(DownloadXMLThreadTask.class.getName()).log(Level.SEVERE, null, ex);
+        } catch (IOException ex)
+        {
+            Logger.getLogger(DownloadXMLThreadTask.class.getName()).log(Level.SEVERE, null, ex);
+        }
+        finally
+        {
+            conn.disconnect();
+        }
+    }
+    
+    @Override
+    public String toString()
+    {
+        return super.toString()
+                + "\nStatus: " + getStatusStr()
+                + "\nURL: " + this.url
+                + "\nXML URL: " + this.xmlURL
+                + "\nRoot folder: " + this.rootSavePath
+                + "\n";
+    }
+}
